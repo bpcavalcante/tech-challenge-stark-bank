@@ -327,10 +327,13 @@ Cada transferência também foi persistida em `transfer_records` como confirmaç
 
 | Métrica | Valor |
 |---------|-------|
-| Boletos emitidos | 11 |
-| Boletos pagos pelo sandbox | 11 |
-| Transferências realizadas | 11 |
+| Boletos emitidos nesta sessão | 11 |
+| Boletos pagos em lote (~10 min após criação) | 9 |
+| Boletos pagos com atraso (~29 min após criação) | 1 (`4651177719365632`) |
+| Boletos sem pagamento registrado nos logs | 1 (`6340027579629568`) — pode chegar em ciclo posterior |
+| Transferências realizadas (lote desta sessão) | 10 às 11:42 + 1 às 12:01 = **11** |
+| Transferências de sessões anteriores processadas nesta janela | 2 (`4971416688525312`, `5815841618657280`) |
 | Falhas de transferência | 0 |
 | Duplicatas processadas | 0 |
 | Destino | Stark Bank S.A. — banco `20018183`, conta `6341320293482496` |
-| Tempo entre emissão e transferência | ~10 minutos (simulação do sandbox) |
+| Tempo entre emissão e transferência | 10 min (maioria) a 29 min (um boleto atrasado) |
