@@ -5,7 +5,7 @@ API REST que integra com o Stark Bank para emitir boletos automaticamente e tran
 ## Stack
 
 - Java 17 + Spring Boot
-- Spring Data JPA + H2 (dev) / PostgreSQL (prod)
+- Spring Data JPA + PostgreSQL (via Docker Compose em dev e prod)
 - Spring Scheduler
 - Stark Bank Java SDK 2.16.0
 - JUnit 5 + Mockito + JaCoCo
@@ -27,6 +27,7 @@ Scheduler (a cada 3h)
 
 - Java 17
 - Maven (ou use o wrapper `mvnw.cmd`)
+- Docker Desktop (para subir o PostgreSQL)
 - [ngrok](https://ngrok.com/) para expor o webhook localmente
 - Credenciais Stark Bank sandbox: Project ID + chave privada ECDSA secp256k1
 
@@ -40,6 +41,21 @@ Scheduler (a cada 3h)
 # Expor localmente
 ngrok http 8080
 ```
+
+### Banco de dados (desenvolvimento)
+
+Suba o PostgreSQL com Docker Compose antes de iniciar a aplicação:
+
+```bash
+docker-compose up -d
+```
+
+| Parâmetro | Valor |
+|-----------|-------|
+| Host | `localhost:5432` |
+| Database | `challengedb` |
+| Usuário | `challenge` |
+| Senha | `challenge` |
 
 ### Iniciar
 
@@ -68,14 +84,9 @@ Em desenvolvimento, a chave é lida de `keys/privateKey.pem`.
 
 | Perfil | Banco | Ativação |
 |--------|-------|----------|
-| `default` | H2 (memória) | padrão |
-| `prod` | PostgreSQL | `-Dspring.profiles.active=prod` |
-
-### H2 Console (dev)
-
-Disponível em `http://localhost:8080/h2-console`
-- JDBC URL: `jdbc:h2:mem:challengedb`
-- Usuário: `sa` / Senha: (vazia)
+| `default` | PostgreSQL via Docker Compose | padrão |
+| `test` | H2 em memória (apenas testes) | automático pelo Maven |
+| `prod` | PostgreSQL (variáveis de ambiente) | `-Dspring.profiles.active=prod` |
 
 ### Endpoints de diagnóstico (apenas perfil dev/default)
 
@@ -84,7 +95,9 @@ Disponível em `http://localhost:8080/h2-console`
 | `GET` | `/diagnostics/invoices` | Lista as 20 invoices mais recentes com status |
 | `GET` | `/diagnostics/events` | Lista os 30 eventos mais recentes com logType |
 | `GET` | `/diagnostics/webhooks` | Lista os webhooks registrados e suas subscriptions |
+| `POST` | `/diagnostics/invoices/test-create` | Cria uma invoice de teste para validar credenciais |
 | `POST` | `/diagnostics/invoices/{id}/pay` | Tenta simular pagamento (ver Bug #3) |
+| `POST` | `/diagnostics/generate-keys` | Gera novo par de chaves ECDSA e salva em `keys/` |
 
 ---
 
