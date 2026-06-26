@@ -4,11 +4,16 @@ API REST que integra com o Stark Bank para emitir boletos automaticamente e tran
 
 ## Stack
 
-- Java 17 + Spring Boot
-- Spring Data JPA + PostgreSQL (via Docker Compose em dev e prod)
-- Spring Scheduler
-- Stark Bank Java SDK 2.16.0
-- JUnit 5 + Mockito + JaCoCo
+| Tecnologia 
+|------------|--------|-----|
+| Java 17 
+| Spring Boot
+| Spring Scheduler | — | Agendamento de boletos (`@Scheduled` fixedRate 3h) |
+| PostgreSQL | Banco de produção (AWS RDS)
+| Stark Bank Java SDK | 2.16.0 | Integração com a API Stark Bank 
+| ECDSA secp256k1 | — | Autenticação e validação de assinatura do webhook 
+| nginx | — | Reverse proxy com terminação HTTPS (produção) |
+| Let's Encrypt | — | Certificado TLS (produção) |
 
 ## Fluxo principal
 
@@ -101,6 +106,44 @@ Em desenvolvimento, a chave é lida de `keys/privateKey.pem`.
 
 ---
 
+## Deploy
+
+A aplicação está deployada na AWS e acessível publicamente via HTTPS.
+
+### Infraestrutura
+
+| Componente | Serviço AWS | Especificação |
+|------------|-------------|---------------|
+| Aplicação | EC2 | t3.micro · Amazon Linux 2023 · IP: `3.15.106.59` |
+| Banco de dados | RDS | db.t3.micro · PostgreSQL 16.14 |
+| Reverse proxy | nginx | Portas 443/80 → `localhost:8080` |
+| HTTPS | Let's Encrypt (certbot)
+| DNS | DuckDNS | `stark-challenge.duckdns.org` → `3.15.106.59` |
+
+### URLs
+
+| Recurso | Endereço |
+|---------|----------|
+| Aplicação | `https://stark-challenge.duckdns.org` |
+| Webhook (registrado no Stark Bank sandbox) | `https://stark-challenge.duckdns.org/webhook` |
+
+### Inicialização na EC2
+
+A aplicação roda como serviço systemd com o perfil `prod` e lê a chave privada do sistema de arquivos:
+
+```
+java -jar -Dspring.profiles.active=prod \
+     -Dstark.private.key.path=/home/ec2-user/privateKey.pem \
+     /home/ec2-user/app.jar
+```
+
+### Para avaliação
+
+- O webhook `https://stark-challenge.duckdns.org/webhook` está registrado no dashboard sandbox com subscription `invoice`
+- O scheduler dispara automaticamente a cada 3 horas criando 8–12 boletos
+- Todas as invoices e transferências são persistidas no RDS (tabelas `invoice_records` e `transfer_records`)
+---
+
 ## Banco de dados
 
 ### Por que foi utilizado
@@ -158,7 +201,7 @@ Webhook POST /webhook (invoice.credited)
 
 ### Por que `transfer_records` é a chave de idempotência
 
-A verificação de duplicidade é feita sobre `transfer_records` (e não sobre `invoice_records`) porque um registro de invoice PAID sem `transfer_record` indica que a transferência falhou — e nesse caso o webhook deve ser reprocessado quando reentregue. Só existe `transfer_record` quando a transferência foi concluída com sucesso.
+A verificação de duplicidade é feita sobre `transfer_records` (e não sobre `invoice_records`) porque um registro de invoice PAID sem `transfer_record` indica que a transferência falhou e nesse caso o webhook deve ser reprocessado quando reentregue. Só existe `transfer_record` quando a transferência foi concluída com sucesso.
 
 ### Segunda linha de defesa
 
@@ -246,14 +289,6 @@ Em 4 execuções consecutivas com o mesmo projeto e as mesmas chaves: falha → 
 11:16:26 INFO  10 boletos criados e registrados.   ← mesmo projeto, mesma chave
 ```
 
-**Análise:** O bloqueio é um rate limiting ou throttle no endpoint `POST /v2/invoice` do sandbox, com cooldown de aproximadamente 5 minutos. O código de erro `invalidCredentials` é completamente incorreto — a assinatura ECDSA é válida (comprovado pelo fato de que GET funciona simultaneamente com as mesmas credenciais). A aparência de "corrupção permanente" observada no incidente overnight (23/06 18:39 → 24/06 10:15) provavelmente se deve ao acúmulo de retries excessivos que estenderam o período de bloqueio do servidor, criando um ciclo vicioso.
-
-**Dado adicional — bloqueio específico por endpoint:** `Transfer.create (POST)` funcionou corretamente durante todo o período em que `Invoice.create (POST)` estava bloqueado, confirmando que não é uma falha genérica de autenticação, mas um throttle específico de `/v2/invoice`.
-
-**Workaround:** Reiniciar a aplicação. O bloqueio some em alguma tentativa subsequente sem padrão de tempo determinístico. O retry automático com intervalos curtos (10 segundos × 7 tentativas) pode agravar o problema mantendo o servidor em estado de bloqueio.
-
-**Comportamento esperado:** O sandbox deveria retornar um código de erro correto (`rateLimitExceeded` ou `serviceUnavailable`) em vez de `invalidCredentials`, indicar o tempo de espera via header `Retry-After`, e documentar os limites de taxa do endpoint `/v2/invoice`.
-
 ---
 
 ## Evidências de execução bem-sucedida
@@ -323,7 +358,7 @@ Cada transferência também foi persistida em `transfer_records` como confirmaç
 ... (11 registros no total)
 ```
 
-### Resumo da sessão
+### Resumo da sessão (24/06 11:31 BRT)
 
 | Métrica | Valor |
 |---------|-------|
@@ -337,3 +372,69 @@ Cada transferência também foi persistida em `transfer_records` como confirmaç
 | Duplicatas processadas | 0 |
 | Destino | Stark Bank S.A. — banco `20018183`, conta `6341320293482496` |
 | Tempo entre emissão e transferência | 10 min (maioria) a 29 min (um boleto atrasado) |
+
+---
+
+## Evidências de múltiplos ciclos — sessão noturna (24-25/06/2026)
+
+Sessão contínua de ~18h (PID 56500), com o scheduler disparando automaticamente a cada 3 horas. Demonstra a execução repetida do fluxo completo e o comportamento de recuperação automática após o Bug #2.
+
+### Ciclo 1 — 24/06 22:59 BRT (11 boletos)
+
+```
+22:59:40 INFO  Gerando 11 boletos...
+22:59:42 INFO  11 boletos criados e registrados.
+23:01:xx INFO  Transferência criada: id=... (10 transferências imediatas)
+23:11:xx INFO  Transferência criada: id=... (1 transferência atrasada — 12 min)
+```
+
+Todos os 11 boletos pagos e transferidos. ✅
+
+### Ciclo 2 — 25/06 01:59 BRT (8 boletos)
+
+```
+01:59:40 INFO  Gerando 8 boletos...
+01:59:42 INFO  8 boletos criados e registrados.
+02:02-02:03 INFO  Transferência criada: id=... (7 transferências imediatas)
+14:11-14:12 INFO  Transferência criada: id=... (2 transferências tardias — chegaram horas depois)
+```
+
+Todos os 8 boletos pagos e transferidos (2 com webhook tardio). ✅
+
+### Ciclos 3–6 — Bug #2 (04:59 / 07:59 / 10:59 / 13:59 BRT)
+
+```
+04:59:40 INFO  Gerando 8 boletos...
+04:59:41 WARN  Tentativa 1/7 falhou: invalidCredentials. Retentando em 10000ms...
+...
+05:00:48 ERROR Erro ao criar boletos após 7 tentativas: invalidCredentials
+[padrão repetido às 07:59, 10:59 e 13:59]
+```
+
+Throttle do sandbox ativo por ~12 horas. Scheduler continuou disparando; aplicação não precisou ser reiniciada. ❌
+
+### Ciclo 7 — 25/06 16:59 BRT (9 boletos) — recuperação automática
+
+```
+16:59:40 INFO  Gerando 9 boletos...
+16:59:42 INFO  9 boletos criados e registrados.
+17:01:xx INFO  Transferência criada: id=... (8 transferências imediatas)
+17:11:45 INFO  Transferência criada: id=5811520904626176, invoiceId=6581966744846336, valor=51180 cents
+```
+
+Throttle encerrado sem intervenção. Todos os 9 boletos pagos e transferidos. ✅
+
+### Resumo da sessão noturna
+
+| Métrica | Valor |
+|---------|-------|
+| Duração total da sessão | ~18h (22:59 → 17:11) |
+| Ciclos do scheduler disparados | 7 (a cada 3 horas exatas) |
+| Ciclos bem-sucedidos | 3 (22:59, 01:59, 16:59) |
+| Ciclos bloqueados pelo Bug #2 | 4 (04:59 a 13:59 — throttle de ~12h) |
+| Recuperação automática | ✅ sem restart ou intervenção |
+| Total de boletos criados | 28 (11 + 8 + 9) |
+| Total de transferências realizadas | 28 |
+| Falhas de transferência | 0 |
+| Duplicatas processadas | 0 |
+| Idempotência validada | ✅ webhooks tardios processados corretamente sem reprocessamento |
