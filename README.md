@@ -4,16 +4,14 @@ API REST que integra com o Stark Bank para emitir boletos automaticamente e tran
 
 ## Stack
 
-| Tecnologia 
-|------------|--------|-----|
-| Java 17 
-| Spring Boot
-| Spring Scheduler | — | Agendamento de boletos (`@Scheduled` fixedRate 3h) |
-| PostgreSQL | Banco de produção (AWS RDS)
-| Stark Bank Java SDK | 2.16.0 | Integração com a API Stark Bank 
-| ECDSA secp256k1 | — | Autenticação e validação de assinatura do webhook 
-| nginx | — | Reverse proxy com terminação HTTPS (produção) |
-| Let's Encrypt | — | Certificado TLS (produção) |
+- **Java 17**
+- **Spring Boot**
+- **Spring Scheduler** — agendamento de boletos (`@Scheduled` fixedRate 3h)
+- **PostgreSQL** — banco de produção (AWS RDS)
+- **Stark Bank Java SDK 2.16.0** — integração com a API Stark Bank
+- **ECDSA secp256k1** — autenticação e validação de assinatura do webhook
+- **nginx** — reverse proxy com terminação HTTPS (produção)
+- **Let's Encrypt** — certificado TLS (produção)
 
 ## Fluxo principal
 
@@ -31,7 +29,7 @@ Scheduler (a cada 3h)
 ### Pré-requisitos
 
 - Java 17
-- Maven (ou use o wrapper `mvnw.cmd`)
+- Maven
 - Docker Desktop (para subir o PostgreSQL)
 - [ngrok](https://ngrok.com/) para expor o webhook localmente
 - Credenciais Stark Bank sandbox: Project ID + chave privada ECDSA secp256k1
